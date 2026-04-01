@@ -1,0 +1,4 @@
+photocrit
+*.test
+*.out
+.env
