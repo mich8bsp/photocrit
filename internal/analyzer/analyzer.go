@@ -31,7 +31,7 @@ var ErrSkip = errors.New("skip")
 // maxLongestEdge is the longest edge in pixels images are downscaled to before sending to the API.
 // maxAPIBytes is the Anthropic API's hard limit for base64-decoded image size.
 const maxAPIBytes = 5 * 1024 * 1024
-const maxLongestEdge = 2048
+const maxLongestEdge = 1024
 
 // rawExtensions lists RAW file extensions.
 var rawExtensions = map[string]bool{
@@ -135,18 +135,15 @@ const analysisSchema = `{
 }`
 
 // analysisSystemPrompt guides Claude in evaluating photographs.
-const analysisSystemPrompt = `You are an expert photography critic specializing in wildlife, macro, street, travel, and landscape photography. Your role is to evaluate photographs and categorize them into one of three tiers:
+const analysisSystemPrompt = `You are an expert photography critic specializing in wildlife, macro, street, travel, and landscape photography. Categorize each photo into one of three tiers:
 
-- "failed": Technically unusable — blurry, severely over/under-exposed, badly out of focus, or so technically flawed the image cannot be saved in post-processing
-- "good": Technically sound but not particularly memorable; competent execution without a standout moment, composition, or light
-- "keeper": Worth saving, sharing, or posting — has a standout quality such as a decisive moment, exceptional light, strong composition, remarkable subject behaviour, or significant emotional impact
+- "failed": Technically unusable — blurry, severely over/under-exposed, out of focus, or unrecoverable in post
+- "good": Technically sound but not memorable — competent but no standout moment, light, or composition
+- "keeper": Worth saving or posting — standout light, composition, decisive moment, or subject behaviour
 
-Evaluate each image across these criteria:
-1. Technical quality: sharpness/focus, exposure (highlights, shadows, dynamic range), noise, motion blur
-2. Composition: rule of thirds, leading lines, framing, subject isolation, background clutter
-3. Light: quality, direction, golden/blue hour, harsh midday, artificial
-4. Moment/Impact: decisive moment, emotion, wildlife behaviour, drama, story
-5. Post-processing potential: recoverable headroom vs. already ruined
+Evaluate: sharpness, exposure, noise, composition, light quality, impact, and post-processing potential.
+
+Be concise. Reasoning should be 2-3 sentences max. Strengths and weaknesses: 3 items max each.
 
 Respond ONLY with valid JSON matching this schema:
 ` + analysisSchema
@@ -179,7 +176,7 @@ func AnalyzeImage(ctx context.Context, client *anthropic.Client, model string, f
 
 		msg, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 			Model:     model,
-			MaxTokens: 1024,
+			MaxTokens: 512,
 			System: []anthropic.TextBlockParam{
 				{Text: analysisSystemPrompt},
 			},

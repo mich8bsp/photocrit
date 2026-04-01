@@ -45,6 +45,9 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 
 	// Determine model
 	model := flagModel
+	if flagHaiku {
+		model = "claude-haiku-4-5-20251001"
+	}
 	compareModel := model
 	if flagOpus {
 		compareModel = "claude-opus-4-6"
