@@ -22,6 +22,7 @@ type PhotoDecision struct {
 	Filename   string    `json:"filename"`
 	Category   Category  `json:"category"`
 	Override   *Category `json:"override"`
+	Score      *int      `json:"score,omitempty"` // 0–100, keepers only
 	Reasoning  string    `json:"reasoning"`
 	Technical  string    `json:"technical"`
 	Strengths  []string  `json:"strengths"`

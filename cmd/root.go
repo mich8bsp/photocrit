@@ -14,6 +14,7 @@ var (
 	flagOpus        bool
 	flagHaiku       bool
 	flagBatch       int
+	flagResume      bool
 	flagConcurrency int
 	flagReviewFile  string
 	flagDryRun      bool
@@ -44,6 +45,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&flagHaiku, "haiku", false, "Use claude-haiku-4-5 for individual pass (cheaper, faster)")
 	rootCmd.PersistentFlags().BoolVar(&flagOpus, "opus", false, "Use claude-opus-4-6 for comparative pass")
 	rootCmd.PersistentFlags().IntVar(&flagBatch, "batch", 0, "Process images in batches of N (0 = no batching, enforces 200-image limit)")
+	rootCmd.PersistentFlags().BoolVar(&flagResume, "resume", false, "Skip images already present in an existing review file")
 	rootCmd.PersistentFlags().IntVar(&flagConcurrency, "concurrency", 5, "Max parallel Claude API calls")
 	rootCmd.PersistentFlags().StringVar(&flagReviewFile, "review-file", "", "Path to review file (default: <dir>/photocrit-review.json)")
 	rootCmd.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "Print what would happen without writing files")

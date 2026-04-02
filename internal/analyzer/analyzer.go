@@ -128,6 +128,7 @@ func downscale(img image.Image, maxEdge uint) image.Image {
 // analysisSchema is the JSON schema we ask Claude to follow in its response.
 const analysisSchema = `{
   "category": "failed|good|keeper",
+  "score": 85,
   "reasoning": "narrative explanation",
   "technical": "technical assessment",
   "strengths": ["array", "of", "strengths"],
@@ -141,6 +142,8 @@ const analysisSystemPrompt = `You are an expert photography critic specializing 
 - "good": Technically sound but not memorable — competent but no standout moment, light, or composition
 - "keeper": Worth saving or posting — standout light, composition, decisive moment, or subject behaviour
 
+For keepers, also assign a score from 0–100 reflecting overall quality and impact (higher = better). Set score to 0 for failed and good.
+
 Evaluate: sharpness, exposure, noise, composition, light quality, impact, and post-processing potential.
 
 Be concise. Reasoning should be 2-3 sentences max. Strengths and weaknesses: 3 items max each.
@@ -151,6 +154,7 @@ Respond ONLY with valid JSON matching this schema:
 // claudeResponse is the expected JSON structure from Claude.
 type claudeResponse struct {
 	Category   string   `json:"category"`
+	Score      int      `json:"score"`
 	Reasoning  string   `json:"reasoning"`
 	Technical  string   `json:"technical"`
 	Strengths  []string `json:"strengths"`
@@ -230,14 +234,22 @@ func AnalyzeImage(ctx context.Context, client *anthropic.Client, model string, f
 			cat = reviewer.CategoryGood
 		}
 
-		return reviewer.PhotoDecision{
+		d := reviewer.PhotoDecision{
 			Filename:   filename,
 			Category:   cat,
 			Reasoning:  cr.Reasoning,
 			Technical:  cr.Technical,
 			Strengths:  cr.Strengths,
 			Weaknesses: cr.Weaknesses,
-		}, nil
+		}
+		if cat == reviewer.CategoryKeeper && cr.Score > 0 {
+			score := cr.Score
+			if score > 100 {
+				score = 100
+			}
+			d.Score = &score
+		}
+		return d, nil
 	}
 
 	return reviewer.PhotoDecision{}, fmt.Errorf("max retries exceeded for %s: %w", filename, lastErr)

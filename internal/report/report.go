@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/photocrit/photocrit/internal/reviewer"
@@ -37,10 +38,28 @@ func Generate(rf reviewer.ReviewFile) string {
 	sb.WriteString(fmt.Sprintf("| **Total** | **%d** |\n\n", total))
 	sb.WriteString("---\n\n")
 
+	// Sort keepers by score descending before writing
+	photos := make([]reviewer.PhotoDecision, len(rf.Photos))
+	copy(photos, rf.Photos)
+	sort.SliceStable(photos, func(i, j int) bool {
+		if reviewer.EffectiveCategory(photos[i]) == reviewer.CategoryKeeper &&
+			reviewer.EffectiveCategory(photos[j]) == reviewer.CategoryKeeper {
+			si, sj := 0, 0
+			if photos[i].Score != nil {
+				si = *photos[i].Score
+			}
+			if photos[j].Score != nil {
+				sj = *photos[j].Score
+			}
+			return si > sj
+		}
+		return false
+	})
+
 	// Sections per category
-	writeSection(&sb, rf.Photos, reviewer.CategoryKeeper, "Keepers", counts[reviewer.CategoryKeeper])
-	writeSection(&sb, rf.Photos, reviewer.CategoryGood, "Good Shots", counts[reviewer.CategoryGood])
-	writeSection(&sb, rf.Photos, reviewer.CategoryFailed, "Failed Shots", counts[reviewer.CategoryFailed])
+	writeSection(&sb, photos, reviewer.CategoryKeeper, "Keepers", counts[reviewer.CategoryKeeper])
+	writeSection(&sb, photos, reviewer.CategoryGood, "Good Shots", counts[reviewer.CategoryGood])
+	writeSection(&sb, photos, reviewer.CategoryFailed, "Failed Shots", counts[reviewer.CategoryFailed])
 
 	// Groups section (only multi-image groups)
 	var multiGroups []reviewer.Group
@@ -76,6 +95,9 @@ func writeSection(sb *strings.Builder, photos []reviewer.PhotoDecision, cat revi
 		}
 		sb.WriteString(fmt.Sprintf("### %s\n", p.Filename))
 		sb.WriteString(fmt.Sprintf("**Category:** %s\n", p.Category))
+		if p.Score != nil {
+			sb.WriteString(fmt.Sprintf("**Score:** %d/100\n", *p.Score))
+		}
 		if p.Override != nil {
 			sb.WriteString(fmt.Sprintf("**Override:** %s\n", *p.Override))
 		}

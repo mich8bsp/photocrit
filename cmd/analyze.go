@@ -70,6 +70,36 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Resume: load existing decisions and skip already-analyzed images
+	var existingDecisions []reviewer.PhotoDecision
+	var existingGroups []reviewer.Group
+	if flagResume {
+		if existing, err := reviewer.ReadReviewFile(reviewFilePath); err == nil {
+			existingDecisions = existing.Photos
+			existingGroups = existing.Groups
+			analyzed := make(map[string]bool, len(existingDecisions))
+			for _, d := range existingDecisions {
+				analyzed[d.Filename] = true
+			}
+			remaining := images[:0]
+			for _, img := range images {
+				if !analyzed[img.Filename] {
+					remaining = append(remaining, img)
+				}
+			}
+			fmt.Fprintf(os.Stderr, "Resuming: %d already analyzed, %d remaining.\n",
+				len(existingDecisions), len(remaining))
+			images = remaining
+		} else {
+			fmt.Fprintf(os.Stderr, "No existing review file found, starting fresh.\n")
+		}
+	}
+
+	if len(images) == 0 {
+		fmt.Fprintln(os.Stderr, "All images already analyzed. Nothing to do.")
+		return nil
+	}
+
 	// Split into batches
 	batches := chunkImages(images, flagBatch)
 
@@ -141,6 +171,10 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+
+	// Merge with existing decisions from a previous partial run
+	allDecisions = append(existingDecisions, allDecisions...)
+	allGroups = append(existingGroups, allGroups...)
 
 	// Count by category
 	counts := make(map[reviewer.Category]int)
