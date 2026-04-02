@@ -43,7 +43,7 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		reviewFilePath = filepath.Join(dir, "photocrit-review.json")
 	}
 
-	// Determine model
+	// Determine models
 	model := flagModel
 	if flagHaiku {
 		model = "claude-haiku-4-5-20251001"
@@ -55,7 +55,11 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 
 	// Phase 1 — Scan
 	fmt.Fprintf(os.Stderr, "Scanning %s...\n", dir)
-	images, err := scanner.Scan(dir, flagRecursive)
+	limit := scanner.MaxImages
+	if flagBatch > 0 {
+		limit = 0 // no cap when batching
+	}
+	images, err := scanner.Scan(dir, flagRecursive, limit)
 	if err != nil {
 		return err
 	}
@@ -66,70 +70,81 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Phase 2 — Individual Analysis
+	// Split into batches
+	batches := chunkImages(images, flagBatch)
+
 	c := anthropic.NewClient()
 	client := &c
 	ctx := context.Background()
 
-	fmt.Fprintf(os.Stderr, "Analyzing %d images (concurrency=%d, model=%s)...\n",
-		len(images), flagConcurrency, model)
+	var allDecisions []reviewer.PhotoDecision
+	var allGroups []reviewer.Group
+	groupOffset := 0
+	totalAnalyzed := 0
 
-	decisions, err := analyzer.AnalyzeBatch(ctx, client, model, images, flagConcurrency,
-		func(done, total int) {
-			fmt.Fprintf(os.Stderr, "\rAnalyzing %d/%d...", done, total)
-		})
-	if err != nil {
-		return fmt.Errorf("analysis failed: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "\rAnalyzed %d/%d images.    \n", len(decisions), len(images))
-
-	// Phase 3 — Group and Comparative Analysis
-	fmt.Fprintf(os.Stderr, "Grouping images...\n")
-	groups := scanner.GroupBySequence(images)
-	fmt.Fprintf(os.Stderr, "Found %d groups.\n", len(groups))
-
-	fmt.Fprintf(os.Stderr, "Running comparative pass (model=%s)...\n", compareModel)
-	updatedDecisions, summaries, err := comparator.RunComparativePass(ctx, client, compareModel, groups, decisions)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: comparative pass error: %v\n", err)
-		updatedDecisions = decisions
-	}
-
-	// Phase 4 — Assign group IDs and build reviewer groups
-	decisionMap := make(map[string]reviewer.PhotoDecision, len(updatedDecisions))
-	for _, d := range updatedDecisions {
-		decisionMap[d.Filename] = d
-	}
-
-	var reviewerGroups []reviewer.Group
-	for gIdx, group := range groups {
-		if len(group) < 2 {
-			continue
+	for bIdx, batch := range batches {
+		if len(batches) > 1 {
+			fmt.Fprintf(os.Stderr, "\n--- Batch %d/%d (%d images) ---\n", bIdx+1, len(batches), len(batch))
 		}
-		groupID := fmt.Sprintf("group_%03d", gIdx+1)
-		filenames := make([]string, len(group))
-		for i, img := range group {
-			filenames[i] = img.Filename
+
+		// Individual analysis
+		fmt.Fprintf(os.Stderr, "Analyzing %d images (concurrency=%d, model=%s)...\n",
+			len(batch), flagConcurrency, model)
+
+		decisions, err := analyzer.AnalyzeBatch(ctx, client, model, batch, flagConcurrency,
+			func(done, total int) {
+				fmt.Fprintf(os.Stderr, "\rAnalyzing %d/%d...", done, total)
+			})
+		if err != nil {
+			return fmt.Errorf("analysis failed (batch %d): %w", bIdx+1, err)
 		}
-		rg := reviewer.Group{
-			ID:        groupID,
-			Filenames: filenames,
-			Summary:   summaries[groupID],
+		fmt.Fprintf(os.Stderr, "\rAnalyzed %d/%d images.    \n", len(decisions), len(batch))
+		totalAnalyzed += len(decisions)
+
+		// Comparative pass
+		groups := scanner.GroupBySequence(batch)
+		fmt.Fprintf(os.Stderr, "Running comparative pass (model=%s)...\n", compareModel)
+		updatedDecisions, summaries, err := comparator.RunComparativePass(ctx, client, compareModel, groups, decisions)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: comparative pass error: %v\n", err)
+			updatedDecisions = decisions
 		}
-		reviewerGroups = append(reviewerGroups, rg)
+
+		// Build decision map for this batch
+		decisionMap := make(map[string]reviewer.PhotoDecision, len(updatedDecisions))
+		for _, d := range updatedDecisions {
+			decisionMap[d.Filename] = d
+		}
+
+		// Assign group IDs (offset to avoid collisions across batches)
+		for gIdx, group := range groups {
+			if len(group) < 2 {
+				continue
+			}
+			groupID := fmt.Sprintf("group_%03d", groupOffset+gIdx+1)
+			filenames := make([]string, len(group))
+			for i, img := range group {
+				filenames[i] = img.Filename
+			}
+			allGroups = append(allGroups, reviewer.Group{
+				ID:        groupID,
+				Filenames: filenames,
+				Summary:   summaries[groupID],
+			})
+		}
+		groupOffset += len(groups)
+
+		// Preserve image order for this batch
+		for _, img := range batch {
+			if d, ok := decisionMap[img.Filename]; ok {
+				allDecisions = append(allDecisions, d)
+			}
+		}
 	}
 
-	// Rebuild decisions in original image order
-	finalDecisions := make([]reviewer.PhotoDecision, 0, len(images))
-	for _, img := range images {
-		if d, ok := decisionMap[img.Filename]; ok {
-			finalDecisions = append(finalDecisions, d)
-		}
-	}
-
-	// Count by category for summary
+	// Count by category
 	counts := make(map[reviewer.Category]int)
-	for _, d := range finalDecisions {
+	for _, d := range allDecisions {
 		counts[d.Category]++
 	}
 
@@ -138,8 +153,8 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		Directory:  dir,
 		AnalyzedAt: time.Now().UTC(),
 		Model:      model,
-		Photos:     finalDecisions,
-		Groups:     reviewerGroups,
+		Photos:     allDecisions,
+		Groups:     allGroups,
 	}
 
 	if flagDryRun {
@@ -151,12 +166,11 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Print summary
 	fmt.Printf("\nphotocrit analysis complete\n")
 	fmt.Printf("  Keepers: %d\n", counts[reviewer.CategoryKeeper])
 	fmt.Printf("  Good:    %d\n", counts[reviewer.CategoryGood])
 	fmt.Printf("  Failed:  %d\n", counts[reviewer.CategoryFailed])
-	fmt.Printf("  Total:   %d\n\n", len(finalDecisions))
+	fmt.Printf("  Total:   %d\n\n", totalAnalyzed)
 	if !flagDryRun {
 		fmt.Printf("Review file: %s\n", reviewFilePath)
 		fmt.Printf("Inspect and optionally edit the review file, then run:\n")
@@ -164,4 +178,20 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// chunkImages splits images into chunks of size n. If n <= 0, returns a single chunk.
+func chunkImages(images []scanner.ImageFile, n int) [][]scanner.ImageFile {
+	if n <= 0 {
+		return [][]scanner.ImageFile{images}
+	}
+	var chunks [][]scanner.ImageFile
+	for i := 0; i < len(images); i += n {
+		end := i + n
+		if end > len(images) {
+			end = len(images)
+		}
+		chunks = append(chunks, images[i:end])
+	}
+	return chunks
 }

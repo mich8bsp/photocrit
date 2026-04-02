@@ -46,9 +46,10 @@ type ImageFile struct {
 	SizeBytes int64
 }
 
-// Scan walks dir (recursively if recursive=true), finds image files, and
-// enforces the 200-image hard cap. Files inside category subdirectories are skipped.
-func Scan(dir string, recursive bool) ([]ImageFile, error) {
+// Scan walks dir (recursively if recursive=true) and returns all image files found.
+// Files inside category subdirectories are skipped.
+// If limit > 0, returns an error if more than limit images are found.
+func Scan(dir string, recursive bool, limit int) ([]ImageFile, error) {
 	var images []ImageFile
 
 	walkFn := func(path string, info os.FileInfo, err error) error {
@@ -80,17 +81,17 @@ func Scan(dir string, recursive bool) ([]ImageFile, error) {
 			SizeBytes: info.Size(),
 		})
 
-		if len(images) > MaxImages {
-			return fmt.Errorf("exceeded %d image limit", MaxImages)
+		if limit > 0 && len(images) > limit {
+			return fmt.Errorf("exceeded %d image limit", limit)
 		}
 		return nil
 	}
 
 	if err := filepath.Walk(dir, walkFn); err != nil {
-		if strings.Contains(err.Error(), fmt.Sprintf("exceeded %d image limit", MaxImages)) {
+		if limit > 0 && strings.Contains(err.Error(), fmt.Sprintf("exceeded %d image limit", limit)) {
 			return nil, fmt.Errorf(
-				"found more than %d images in %s — split into smaller directories or use a subdirectory",
-				MaxImages, dir,
+				"found more than %d images in %s — use --batch to process in chunks",
+				limit, dir,
 			)
 		}
 		return nil, fmt.Errorf("scan directory %s: %w", dir, err)
