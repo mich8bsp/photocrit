@@ -14,17 +14,21 @@ import (
 	"github.com/photocrit/photocrit/internal/scanner"
 )
 
+var flagForce bool
+
 var scoreCmd = &cobra.Command{
 	Use:   "score <directory>",
 	Short: "Add scores to keeper photos that are missing them",
 	Long: `Reads the existing review file, finds keeper photos without a score,
-re-analyzes only those images to assign a score, and writes the updated review file.`,
+re-analyzes only those images to assign a score, and writes the updated review file.
+Use --force to re-score all keepers, including those already scored.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runScore,
 }
 
 func init() {
 	rootCmd.AddCommand(scoreCmd)
+	scoreCmd.Flags().BoolVar(&flagForce, "force", false, "Re-score all keepers, including those already scored")
 }
 
 func runScore(cmd *cobra.Command, args []string) error {
@@ -44,11 +48,13 @@ func runScore(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Find keepers without a score
+	// Find keepers to score: all if --force, otherwise only those without a score
 	var toScore []string
 	for _, p := range rf.Photos {
-		if reviewer.EffectiveCategory(p) == reviewer.CategoryKeeper && p.Score == nil {
-			toScore = append(toScore, p.Filename)
+		if reviewer.EffectiveCategory(p) == reviewer.CategoryKeeper {
+			if flagForce || p.Score == nil {
+				toScore = append(toScore, p.Filename)
+			}
 		}
 	}
 
@@ -65,15 +71,23 @@ func runScore(cmd *cobra.Command, args []string) error {
 		needsScore[f] = true
 	}
 
-	// Scan directory to get full paths for target files
-	allImages, err := scanner.Scan(dir, flagRecursive, 0)
-	if err != nil {
-		return err
+	// Scan directory and _keepers/ subdirectory (files may have been moved by apply)
+	dirsToScan := []string{dir}
+	if keepersDir := filepath.Join(dir, "_keepers"); dirExists(keepersDir) {
+		dirsToScan = append(dirsToScan, keepersDir)
 	}
 	var images []scanner.ImageFile
-	for _, img := range allImages {
-		if needsScore[img.Filename] {
-			images = append(images, img)
+	seen := make(map[string]bool)
+	for _, scanDir := range dirsToScan {
+		found, err := scanner.Scan(scanDir, false, 0)
+		if err != nil {
+			return err
+		}
+		for _, img := range found {
+			if needsScore[img.Filename] && !seen[img.Filename] {
+				images = append(images, img)
+				seen[img.Filename] = true
+			}
 		}
 	}
 
@@ -135,10 +149,15 @@ func runScore(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if err := reviewer.WriteReviewFile(reviewFilePath, rf); err != nil {
+	if err = reviewer.WriteReviewFile(reviewFilePath, rf); err != nil {
 		return err
 	}
 	fmt.Printf("Review file updated: %s\n", reviewFilePath)
 	fmt.Printf("Run `photocrit apply %s` to move files and generate the report.\n", dir)
 	return nil
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

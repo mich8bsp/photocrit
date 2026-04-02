@@ -58,8 +58,8 @@ func Scan(dir string, recursive bool, limit int) ([]ImageFile, error) {
 		}
 
 		if info.IsDir() {
-			// Skip category folders regardless of depth
-			if CategoryFolders[info.Name()] {
+			// Skip category folders, but not if it's the root dir being scanned
+			if path != dir && CategoryFolders[info.Name()] {
 				return filepath.SkipDir
 			}
 			// If not recursive, skip subdirectories (but not the root dir itself)

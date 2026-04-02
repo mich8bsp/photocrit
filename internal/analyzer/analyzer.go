@@ -142,7 +142,15 @@ const analysisSystemPrompt = `You are an expert photography critic specializing 
 - "good": Technically sound but not memorable — competent but no standout moment, light, or composition
 - "keeper": Worth saving or posting — standout light, composition, decisive moment, or subject behaviour
 
-For keepers, also assign a score from 0–100 reflecting overall quality and impact (higher = better). Set score to 0 for failed and good.
+For keepers, assign a score from 0–100 reflecting overall quality and impact. Use the full range — most keepers should score 55–80, strong ones 81–89, and only truly exceptional portfolio-worthy shots should reach 90+. Be critical and differentiated; avoid clustering scores.
+
+Score anchors:
+- 90–100: Exceptional — publishable, portfolio-worthy, technically and artistically outstanding
+- 80–89: Strong keeper — compelling image with minor flaws, worth sharing widely
+- 65–79: Solid keeper — clear merit but notable weaknesses or missed potential
+- 50–64: Marginal keeper — has redeeming qualities but significant issues
+
+Set score to 0 for failed and good.
 
 Evaluate: sharpness, exposure, noise, composition, light quality, impact, and post-processing potential.
 
