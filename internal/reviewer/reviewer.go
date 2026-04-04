@@ -19,16 +19,18 @@ const (
 
 // PhotoDecision holds the analysis result for a single photo.
 type PhotoDecision struct {
-	Filename   string    `json:"filename"`
-	Category   Category  `json:"category"`
-	Override   *Category `json:"override"`
-	Score      *int      `json:"score,omitempty"` // 0–100, keepers only
-	Reasoning  string    `json:"reasoning"`
-	Technical  string    `json:"technical"`
-	Strengths  []string  `json:"strengths"`
-	Weaknesses []string  `json:"weaknesses"`
-	GroupID    string    `json:"group_id,omitempty"`
-	GroupRank  int       `json:"group_rank,omitempty"`
+	Filename       string    `json:"filename"`
+	Category       Category  `json:"category"`
+	Override       *Category `json:"override"`
+	Score          *int      `json:"score,omitempty"`           // 0–100, keepers only; computed from subscores
+	TechnicalScore *int      `json:"technical_score,omitempty"` // 0–100, raw technical subscore
+	ArtisticScore  *int      `json:"artistic_score,omitempty"`  // 0–100, raw artistic subscore
+	Reasoning      string    `json:"reasoning"`
+	Technical      string    `json:"technical"`
+	Strengths      []string  `json:"strengths"`
+	Weaknesses     []string  `json:"weaknesses"`
+	GroupID        string    `json:"group_id,omitempty"`
+	GroupRank      int       `json:"group_rank,omitempty"`
 }
 
 // Group represents a burst or scene group of related photos.

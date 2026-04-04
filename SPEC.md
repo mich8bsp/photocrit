@@ -2,7 +2,7 @@
 
 ## Overview
 
-`photocrit` is a CLI tool that analyzes a directory of photographs using Claude's vision API and categorizes them into three tiers: failed shots, good shots, and keepers. It produces a human-reviewable decision file before touching any files, and generates a markdown report explaining each decision.
+`photocrit` is a CLI tool that analyzes a directory of photographs using Claude's vision API and categorizes them into three tiers: failed shots, good shots, and keepers. It produces a human-reviewable decision file before touching any files, and generates a markdown report explaining each decision. Keeper photos receive a score (0–100) for ranking.
 
 ---
 
@@ -11,6 +11,7 @@
 ```
 photocrit analyze <directory>   # analyze images, write review file, do not move files
 photocrit apply <directory>     # read review file, move files, write final report
+photocrit score <directory>     # add/update scores for keeper photos
 ```
 
 ### Flags
@@ -18,17 +19,37 @@ photocrit apply <directory>     # read review file, move files, write final repo
 | Flag | Default | Description |
 |---|---|---|
 | `--model` | `claude-sonnet-4-6` | Claude model for individual analysis pass |
-| `--opus` | false | Use `claude-opus-4-6` for the comparative pass (higher quality judgement) |
+| `--haiku` | false | Use `claude-haiku-4-5` for individual pass (~15x cheaper) |
+| `--opus` | false | Use `claude-opus-4-6` for the comparative pass |
 | `--concurrency` | `5` | Max parallel Claude API calls |
+| `--batch` | `0` | Process images in batches of N (0 = no batching, enforces 200-image limit) |
+| `--resume` | false | Skip images already present in an existing review file |
 | `--review-file` | `<dir>/photocrit-review.json` | Path to review file |
-| `--dry-run` | false | Print what would happen without writing files |
+| `--recursive` | false | Recurse into subdirectories |
+| `--dry-run` | false | Print what would happen without writing files or moving images |
+
+#### `score`-only flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--force` | false | Re-score all keepers, including those already scored |
 
 ### Typical workflow
 
 ```bash
-photocrit analyze ./photos          # run analysis, produces photocrit-review.json
-# user inspects and optionally edits photocrit-review.json
+# Standard run
+photocrit analyze ./photos          # produces photocrit-review.json
+# inspect/edit photocrit-review.json if needed
 photocrit apply ./photos            # moves files, writes photocrit-report.md
+
+# Large directories (>200 images)
+photocrit analyze ./photos --batch 100
+
+# Resume an interrupted run
+photocrit analyze ./photos --batch 100 --resume
+
+# Backfill scores after apply
+photocrit score ./photos
 ```
 
 ---
@@ -49,41 +70,37 @@ Folders are created inside the target directory, prefixed with `_` so they sort 
 
 ### Phase 1 — Scan
 
-- Recursively find all image files in the target directory (non-recursive by default, `--recursive` flag to opt in)
+- Walk the target directory (non-recursive by default, `--recursive` to opt in)
 - Supported extensions: `.jpg`, `.jpeg`, `.png`, `.heic`, `.tiff`, `.tif`, `.webp`, `.cr2`, `.nef`, `.arw`, `.dng`, `.orf`, `.rw2`
-- Skip files inside `_failed/`, `_good/`, `_keepers/` to avoid re-processing
-- Enforce a hard cap of 200 images per run; fail with a clear error if exceeded
-- Images larger than 5MB are downscaled to fit before encoding (preserve aspect ratio, target longest edge ≤ 2048px) — RAW files in particular may need this
+- Skip files inside `_failed/`, `_good/`, `_keepers/` unless one of those is the root being scanned
+- Enforce a hard cap of 200 images when `--batch` is not set; fail with a clear error if exceeded
+- When `--batch N` is set, skip the cap and split images into chunks of N processed sequentially
 
 ### Phase 2 — Individual Analysis
 
-For each image, make a Claude vision API call with:
-- The image as a base64-encoded data URL
-- A structured prompt requesting: category, technical assessment, narrative reasoning, notable strengths and weaknesses
+For each image:
+- Decode and downscale to a maximum of **1024px** on the longest edge before encoding (preserves aspect ratio)
+- Re-encode as JPEG; if still >5MB, reduce quality iteratively (85 → 70 → 55) until it fits
+- Send to Claude as a base64-encoded image with a structured prompt
 
-The prompt should orient Claude toward the genres the tool targets: **wildlife, macro, street, travel, and landscape** photography. Evaluation criteria include:
+The prompt orients Claude toward **wildlife, macro, street, travel, and landscape** photography. Evaluation criteria:
+- **Technical**: sharpness/focus, exposure, noise, motion blur
+- **Composition**: rule of thirds, leading lines, framing, subject isolation
+- **Light**: quality, direction, golden/blue hour, harsh vs. soft
+- **Moment/Impact**: decisive moment, emotion, wildlife behaviour, drama
+- **Post-processing potential**: recoverable headroom vs. already ruined
 
-- **Technical**: sharpness/focus, exposure (highlights, shadows, dynamic range), noise, motion blur
-- **Composition**: rule of thirds, leading lines, framing, subject isolation, background clutter
-- **Light**: quality, direction, golden/blue hour, harsh midday, artificial
-- **Moment/Impact**: decisive moment, emotion, behaviour (wildlife), drama, story
-- **Post-processing potential**: headroom in the image vs. already ruined
+Response format: JSON with `category`, `score`, `reasoning`, `technical`, `strengths`, `weaknesses`. `max_tokens` is set to 512.
 
-Process images concurrently up to `--concurrency` limit. Implement exponential backoff for rate limit errors (429) with up to 5 retries.
+Process images concurrently up to `--concurrency`. Exponential backoff on 429, single retry on 5xx, max 5 attempts.
 
 ### Phase 3 — Comparative Analysis
 
-After individual analysis, group images that are likely from the same scene or burst sequence. Use Claude to compare images within each group and identify which, if any, should be elevated or downgraded relative to the individual analysis.
-
-Grouping heuristic (applied before sending to Claude):
-- Images with sequential filenames (e.g., `IMG_0041` through `IMG_0047`) taken within the same session are candidate groups
-- Claude is then shown the group and asked to rank them and confirm/revise categories
-
-This pass uses `--opus` model if the flag is set, otherwise falls back to the same model as Phase 2.
+Group images by sequential filename (gap ≤ 3). For each multi-image group, send all images in a single Claude call and ask it to rank them and confirm/revise individual categories. Groups are processed sequentially. Uses `--opus` model if set.
 
 ### Phase 4 — Review File
 
-Write `photocrit-review.json` (or path from `--review-file`) to the target directory. The user can inspect and edit this file before running `apply`.
+Write `photocrit-review.json` to the target directory. User can inspect and edit before running `apply`.
 
 ```json
 {
@@ -96,8 +113,9 @@ Write `photocrit-review.json` (or path from `--review-file`) to the target direc
       "filename": "IMG_0041.jpg",
       "category": "keeper",
       "override": null,
-      "reasoning": "Sharp image of a kingfisher mid-dive with excellent subject isolation...",
-      "technical": "Well exposed, fast shutter frozen motion, slight chromatic aberration on wing edges",
+      "score": 87,
+      "reasoning": "Sharp image of a kingfisher mid-dive...",
+      "technical": "Well exposed, fast shutter, slight chromatic aberration on wing edges",
       "strengths": ["decisive moment", "clean background", "excellent sharpness"],
       "weaknesses": ["minor fringing on feathers"],
       "group_id": "group_003",
@@ -114,22 +132,48 @@ Write `photocrit-review.json` (or path from `--review-file`) to the target direc
 }
 ```
 
-The `override` field is `null` by default. The user can set it to `"failed"`, `"good"`, or `"keeper"` to override the model's decision. The `apply` command uses `override` if set, otherwise uses `category`.
+The `override` field is `null` by default. Set it to `"failed"`, `"good"`, or `"keeper"` to override the model's decision. The `apply` command uses `override` if set, otherwise `category`.
+
+The `score` field is set for keepers only (0–100). Non-keepers have no score field.
 
 ### Phase 5 — Apply
 
 On `photocrit apply <directory>`:
 1. Read `photocrit-review.json`
 2. Create `_failed/`, `_good/`, `_keepers/` subdirectories as needed
-3. Move each file to the appropriate subdirectory (using effective category: `override ?? category`)
-4. If a file is missing, log a warning and continue
+3. Move each file using effective category (`override ?? category`)
+4. Log warning and continue if source file missing
 5. Write `photocrit-report.md`
+
+---
+
+## Scoring
+
+Keepers receive a score from 0–100. Technical quality (sharpness, focus, exposure, noise) accounts for 60% of the score; artistic merit (composition, light, moment) accounts for 40%. Technical flaws impose hard score ceilings regardless of subject or composition:
+
+| Technical condition | Score ceiling |
+|---|---|
+| Soft focus, focus miss, or motion blur on subject | 65 |
+| Significant noise, poor exposure, or muddy rendering | 60 |
+| Recoverable in post but not clean OOC | 75 |
+| Technically clean | No ceiling |
+
+| Range | Meaning |
+|---|---|
+| 90–100 | Exceptional — publishable, portfolio-worthy, technically and artistically outstanding |
+| 80–89 | Strong keeper — technically clean with compelling composition, light, or moment |
+| 65–79 | Solid keeper — good technical execution with clear artistic merit |
+| 50–64 | Marginal keeper — redeeming artistic qualities but meaningful technical issues |
+
+The report sorts keepers by score descending.
+
+The `score` subcommand can be run after `apply` to backfill scores for keepers that were analyzed before scoring was available. It scans both the root directory and `_keepers/` to find files. Use `--force` to re-score already-scored keepers.
 
 ---
 
 ## Report Format
 
-Written to `<directory>/photocrit-report.md` after `apply`.
+Written to `<directory>/photocrit-report.md` after `apply`. Keepers are sorted by score descending.
 
 ```markdown
 # photocrit Report
@@ -152,29 +196,13 @@ Written to `<directory>/photocrit-report.md` after `apply`.
 
 ### IMG_0041.jpg
 **Category:** keeper
-**Technical:** Well exposed, fast shutter frozen motion, slight chromatic aberration on wing edges
+**Score:** 87/100
+**Technical:** Well exposed, fast shutter frozen motion...
 
-Sharp image of a kingfisher mid-dive with excellent subject isolation...
+Sharp image of a kingfisher mid-dive...
 
 **Strengths:** decisive moment · clean background · excellent sharpness
 **Weaknesses:** minor fringing on feathers
-
----
-
-## Good Shots (47)
-
-...
-
-## Failed Shots (8)
-
-...
-
-## Groups
-
-### Group 3 — 3 images
-IMG_0041 · IMG_0042 · IMG_0043
-
-Three shots of the same kingfisher dive. IMG_0041 captured the peak moment.
 ```
 
 ---
@@ -186,10 +214,11 @@ Three shots of the same kingfisher dive. IMG_0041 captured the peak moment.
 | Unreadable / corrupt image | Skip, log warning, continue |
 | API rate limit (429) | Exponential backoff, up to 5 retries |
 | API hard error (5xx) | Retry once, then fail with clear message |
-| >200 images in directory | Fail immediately with count and instructions to split |
+| >200 images, no `--batch` | Fail immediately with instructions to use `--batch` |
 | Review file missing on `apply` | Fail with clear message pointing to `analyze` |
-| File already in a category folder | Skip on `apply` |
 | Target file already exists in destination | Rename with `_1`, `_2` suffix |
+| HEIC files | Skip with warning (no native Go HEIC support) |
+| RAW decode failure | Skip with warning |
 
 ---
 
@@ -201,12 +230,13 @@ photocrit/
 ├── cmd/
 │   ├── root.go          # cobra root, shared flags
 │   ├── analyze.go       # analyze subcommand
-│   └── apply.go         # apply subcommand
+│   ├── apply.go         # apply subcommand
+│   └── score.go         # score subcommand
 ├── internal/
 │   ├── scanner/
 │   │   └── scanner.go   # directory walk, image discovery, grouping heuristic
 │   ├── analyzer/
-│   │   └── analyzer.go  # individual analysis pass, Claude API calls, concurrency
+│   │   └── analyzer.go  # preprocessing, individual analysis, Claude API calls
 │   ├── comparator/
 │   │   └── comparator.go # comparative pass, group ranking
 │   ├── reviewer/
@@ -236,8 +266,10 @@ Standard library handles JSON, file I/O, base64 encoding, concurrency primitives
 
 ## Constraints & Assumptions
 
-- Images are not copied — they are **moved**. The source directory is modified on `apply`.
+- Images are **moved**, not copied. The source directory is modified on `apply`.
 - The tool does not recurse into subdirectories unless `--recursive` is passed.
-- RAW files (cr2, nef, arw, dng, orf, rw2) are included in the scan but Claude can only process renderable formats. RAW files should be decoded to a preview JPEG in memory before sending to the API. If decoding fails, the file is skipped with a warning.
-- The tool is stateless between runs. Running `analyze` again overwrites the review file.
+- All images are downscaled to 1024px longest edge before API submission regardless of original size.
+- RAW files are decoded to JPEG in memory; if decoding fails, the file is skipped with a warning.
+- HEIC is not supported natively in Go (requires libheif CGo binding — future work).
+- The tool is stateless between runs. Running `analyze` again overwrites the review file unless `--resume` is used.
 - No database, no persistent state beyond the review file and report.

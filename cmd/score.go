@@ -138,6 +138,8 @@ func runScore(cmd *cobra.Command, args []string) error {
 	for i, p := range rf.Photos {
 		if nd, ok := scored[p.Filename]; ok && nd.Score != nil {
 			rf.Photos[i].Score = nd.Score
+			rf.Photos[i].TechnicalScore = nd.TechnicalScore
+			rf.Photos[i].ArtisticScore = nd.ArtisticScore
 			updated++
 		}
 	}

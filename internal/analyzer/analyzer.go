@@ -11,6 +11,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -128,7 +129,8 @@ func downscale(img image.Image, maxEdge uint) image.Image {
 // analysisSchema is the JSON schema we ask Claude to follow in its response.
 const analysisSchema = `{
   "category": "failed|good|keeper",
-  "score": 85,
+  "technical_score": 70,
+  "artistic_score": 85,
   "reasoning": "narrative explanation",
   "technical": "technical assessment",
   "strengths": ["array", "of", "strengths"],
@@ -142,17 +144,24 @@ const analysisSystemPrompt = `You are an expert photography critic specializing 
 - "good": Technically sound but not memorable — competent but no standout moment, light, or composition
 - "keeper": Worth saving or posting — standout light, composition, decisive moment, or subject behaviour
 
-For keepers, assign a score from 0–100 reflecting overall quality and impact. Use the full range — most keepers should score 55–80, strong ones 81–89, and only truly exceptional portfolio-worthy shots should reach 90+. Be critical and differentiated; avoid clustering scores.
+For keepers, provide two independent subscores (0–100 each):
 
-Score anchors:
-- 90–100: Exceptional — publishable, portfolio-worthy, technically and artistically outstanding
-- 80–89: Strong keeper — compelling image with minor flaws, worth sharing widely
-- 65–79: Solid keeper — clear merit but notable weaknesses or missed potential
-- 50–64: Marginal keeper — has redeeming qualities but significant issues
+**technical_score** — rate the actual result only. Do not factor in shooting difficulty, conditions, or artistic intent.
+- 90–100: Tack sharp on subject, perfect exposure, clean rendering, no visible noise
+- 70–89: Good overall with only minor issues (very slight softness, small blown highlight, faint noise)
+- 50–69: Noticeable problems — soft or missed focus, exposure off by more than a stop, visible noise, motion blur on subject
+- 30–49: Significant flaws — clearly out of focus, heavily over/under-exposed, strong noise
+- 0–29: Severely flawed — very blurry, unrecoverable exposure, unusable
 
-Set score to 0 for failed and good.
+**artistic_score** — rate composition, light, moment, and subject interest.
+- 90–100: Exceptional — compelling, memorable, strong visual impact
+- 70–89: Clear artistic merit — good composition, interesting light or moment
+- 50–69: Decent — some merit but unremarkable
+- 30–49: Weak artistically — poor composition, flat light, uninteresting subject
 
-Evaluate: sharpness, exposure, noise, composition, light quality, impact, and post-processing potential.
+The final score is computed as: round(technical_score × 0.6 + artistic_score × 0.4). Do not include a "score" field — it will be calculated automatically.
+
+Be critical and use the full range. Most keepers should have technical_score 50–80. Set both subscores to 0 for failed and good.
 
 Be concise. Reasoning should be 2-3 sentences max. Strengths and weaknesses: 3 items max each.
 
@@ -161,12 +170,13 @@ Respond ONLY with valid JSON matching this schema:
 
 // claudeResponse is the expected JSON structure from Claude.
 type claudeResponse struct {
-	Category   string   `json:"category"`
-	Score      int      `json:"score"`
-	Reasoning  string   `json:"reasoning"`
-	Technical  string   `json:"technical"`
-	Strengths  []string `json:"strengths"`
-	Weaknesses []string `json:"weaknesses"`
+	Category       string   `json:"category"`
+	TechnicalScore int      `json:"technical_score"`
+	ArtisticScore  int      `json:"artistic_score"`
+	Reasoning      string   `json:"reasoning"`
+	Technical      string   `json:"technical"`
+	Strengths      []string `json:"strengths"`
+	Weaknesses     []string `json:"weaknesses"`
 }
 
 // AnalyzeImage calls the Claude vision API for a single image and returns a PhotoDecision.
@@ -250,12 +260,13 @@ func AnalyzeImage(ctx context.Context, client *anthropic.Client, model string, f
 			Strengths:  cr.Strengths,
 			Weaknesses: cr.Weaknesses,
 		}
-		if cat == reviewer.CategoryKeeper && cr.Score > 0 {
-			score := cr.Score
-			if score > 100 {
-				score = 100
-			}
+		if cat == reviewer.CategoryKeeper && (cr.TechnicalScore > 0 || cr.ArtisticScore > 0) {
+			ts := clamp(cr.TechnicalScore, 0, 100)
+			as := clamp(cr.ArtisticScore, 0, 100)
+			score := int(math.Round(float64(ts)*0.6 + float64(as)*0.4))
 			d.Score = &score
+			d.TechnicalScore = &ts
+			d.ArtisticScore = &as
 		}
 		return d, nil
 	}
@@ -286,6 +297,17 @@ func stripCodeFences(s string) string {
 		}
 	}
 	return strings.TrimSpace(s)
+}
+
+// clamp returns v clamped to [lo, hi].
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // truncate shortens a string to at most n runes.
