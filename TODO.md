@@ -27,7 +27,7 @@
 ## 2. Reviewer Types (`internal/reviewer/`) ✅
 
 - [x] `Category` type: `"failed"`, `"good"`, `"keeper"`
-- [x] `PhotoDecision` struct: `Filename`, `Category`, `Override *Category`, `Score *int` (keepers only, computed), `TechnicalScore *int`, `ArtisticScore *int`, `Reasoning`, `Technical`, `Strengths []string`, `Weaknesses []string`, `GroupID`, `GroupRank`
+- [x] `PhotoDecision` struct: `Filename`, `Category`, `Override *Category`, `Score *int` (keepers only, computed), `TechnicalScore *int`, `CompositionScore *int`, `SubjectScore *int`, `BokehScore *int`, `Reasoning`, `Technical`, `Strengths []string`, `Weaknesses []string`, `GroupID`, `GroupRank`
 - [x] `Group` struct: `ID`, `Filenames []string`, `Summary`
 - [x] `ReviewFile` struct: `Version`, `Directory`, `AnalyzedAt`, `Model`, `Photos`, `Groups`
 - [x] `WriteReviewFile`, `ReadReviewFile`, `EffectiveCategory`
@@ -46,8 +46,11 @@
 ## 4. Individual Analysis Pass (`internal/analyzer/`) ✅
 
 - [x] Prompt oriented toward wildlife, macro, street, travel, landscape
-- [x] JSON response schema: `category`, `technical_score`, `artistic_score`, `reasoning`, `technical`, `strengths`, `weaknesses`
-- [x] Two-subscore approach: model returns `technical_score` (60% weight) and `artistic_score` (40% weight); final score computed in Go as `round(ts*0.6 + as*0.4)`
+- [x] JSON response schema: `category`, `technical_score`, `composition_score`, `subject_score`, `bokeh_score`, `reasoning`, `technical`, `strengths`, `weaknesses`
+- [x] Four-subscore approach: technical (30%), composition/colors (30%), subject/wow-factor (25%), bokeh (15%); final score computed in Go as `round(ts*0.30 + cs*0.30 + ss*0.25 + bs*0.15)`
+- [x] technical_score penalises only *unintentional* flaws; intentional bokeh, creative motion blur, dramatic contrast not penalised
+- [x] subject_score rewards wow factor: rare moments, iconic locations, wildlife in action, candid human scenes
+- [x] bokeh_score neutral at 50 when no subject separation present
 - [x] Score anchors in prompt: 90+ exceptional, 80-89 strong, 65-79 solid, 50-64 marginal; subscores=0 for non-keepers
 - [x] `max_tokens` = 512; concise response requested (2-3 sentence reasoning, 3 items max per strength/weakness list)
 - [x] Retry: exponential backoff on 429, single retry on 5xx, max 5 attempts

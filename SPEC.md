@@ -149,21 +149,23 @@ On `photocrit apply <directory>`:
 
 ## Scoring
 
-Keepers receive a score from 0–100. Technical quality (sharpness, focus, exposure, noise) accounts for 60% of the score; artistic merit (composition, light, moment) accounts for 40%. Technical flaws impose hard score ceilings regardless of subject or composition:
+Keepers receive a score from 0–100 computed from four independent subscores:
 
-| Technical condition | Score ceiling |
-|---|---|
-| Soft focus, focus miss, or motion blur on subject | 65 |
-| Significant noise, poor exposure, or muddy rendering | 60 |
-| Recoverable in post but not clean OOC | 75 |
-| Technically clean | No ceiling |
+| Subscore | Weight | What it measures |
+|---|---|---|
+| `technical_score` | 30% | Unintentional flaws only — missed focus, unintended blur, bad exposure, noise. Intentional bokeh, creative motion blur, and dramatic contrast are not penalised. |
+| `composition_score` | 30% | Framing, leading lines, negative space, color harmony, color interest |
+| `subject_score` | 25% | Wow factor — rarity and impact of the subject or moment: iconic locations, wildlife in action, candid human moments, unusual light/weather |
+| `bokeh_score` | 15% | Quality of subject separation and background rendering. Set to 50 (neutral) when no subject separation is present. |
+
+`final_score = round(technical×0.30 + composition×0.30 + subject×0.25 + bokeh×0.15)`
 
 | Range | Meaning |
 |---|---|
-| 90–100 | Exceptional — publishable, portfolio-worthy, technically and artistically outstanding |
-| 80–89 | Strong keeper — technically clean with compelling composition, light, or moment |
-| 65–79 | Solid keeper — good technical execution with clear artistic merit |
-| 50–64 | Marginal keeper — redeeming artistic qualities but meaningful technical issues |
+| 90–100 | Exceptional — publishable, portfolio-worthy |
+| 80–89 | Strong keeper — compelling on all dimensions |
+| 65–79 | Solid keeper — clear merit but notable weaknesses |
+| 50–64 | Marginal keeper — some redeeming qualities, significant issues |
 
 The report sorts keepers by score descending.
 

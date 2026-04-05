@@ -130,7 +130,9 @@ func downscale(img image.Image, maxEdge uint) image.Image {
 const analysisSchema = `{
   "category": "failed|good|keeper",
   "technical_score": 70,
-  "artistic_score": 85,
+  "composition_score": 80,
+  "subject_score": 75,
+  "bokeh_score": 50,
   "reasoning": "narrative explanation",
   "technical": "technical assessment",
   "strengths": ["array", "of", "strengths"],
@@ -142,26 +144,39 @@ const analysisSystemPrompt = `You are an expert photography critic specializing 
 
 - "failed": Technically unusable — blurry, severely over/under-exposed, out of focus, or unrecoverable in post
 - "good": Technically sound but not memorable — competent but no standout moment, light, or composition
-- "keeper": Worth saving or posting — standout light, composition, decisive moment, or subject behaviour
+- "keeper": Worth saving or posting — standout composition, light, subject, or moment
 
-For keepers, provide two independent subscores (0–100 each):
+For keepers, provide four independent subscores (0–100 each):
 
-**technical_score** — rate the actual result only. Do not factor in shooting difficulty, conditions, or artistic intent.
+**technical_score** (30% of final score) — penalise only *unintentional* flaws. Intentional shallow depth of field, motion blur used creatively, or high-contrast dramatic lighting are NOT flaws.
 - 90–100: Tack sharp on subject, perfect exposure, clean rendering, no visible noise
-- 70–89: Good overall with only minor issues (very slight softness, small blown highlight, faint noise)
-- 50–69: Noticeable problems — soft or missed focus, exposure off by more than a stop, visible noise, motion blur on subject
-- 30–49: Significant flaws — clearly out of focus, heavily over/under-exposed, strong noise
-- 0–29: Severely flawed — very blurry, unrecoverable exposure, unusable
+- 70–89: Minor issues only (very slight unintended softness, small blown highlight, faint noise)
+- 50–69: Noticeable unintentional problems — missed focus, exposure off by more than a stop, distracting noise, unintended motion blur on subject
+- 30–49: Significant unintentional flaws — clearly out of focus, heavily over/under-exposed, strong noise
+- 0–29: Severely flawed — very blurry, unrecoverable exposure
 
-**artistic_score** — rate composition, light, moment, and subject interest.
-- 90–100: Exceptional — compelling, memorable, strong visual impact
-- 70–89: Clear artistic merit — good composition, interesting light or moment
-- 50–69: Decent — some merit but unremarkable
-- 30–49: Weak artistically — poor composition, flat light, uninteresting subject
+**composition_score** (30% of final score) — framing, leading lines, use of negative space, color harmony, and color interest.
+- 90–100: Exceptional — masterful framing, compelling color palette, every element deliberate
+- 70–89: Strong composition with pleasing colors and clear visual intention
+- 50–69: Competent but unremarkable — decent framing, ordinary colors
+- 30–49: Weak — cluttered, poor framing, dull or clashing colors
 
-The final score is computed as: round(technical_score × 0.6 + artistic_score × 0.4). Do not include a "score" field — it will be calculated automatically.
+**subject_score** (25% of final score) — the "wow factor" of the subject or moment. Reward rarity, drama, and impact: iconic locations (Mt Fuji, famous temples), wildlife behaviour (bird mid-flight, insect on flower), candid human moments (person praying in the rain, street drama), unusual light or weather. Penalise mundane or uninteresting subjects.
+- 90–100: Exceptional — rare moment, iconic subject, or scene with strong emotional/visual impact
+- 70–89: Interesting subject or moment with clear appeal
+- 50–69: Ordinary subject, competently captured
+- 30–49: Dull or uninteresting subject with no memorable moment
 
-Be critical and use the full range. Most keepers should have technical_score 50–80. Set both subscores to 0 for failed and good.
+**bokeh_score** (15% of final score) — quality of subject separation and background rendering. If the photo has no subject separation or shallow depth of field, set this to 50 (neutral — neither rewarded nor penalised).
+- 90–100: Beautiful, smooth bokeh that perfectly isolates the subject; background shapes are pleasing
+- 70–89: Good separation with clean background rendering
+- 50: No subject separation present — neutral, does not affect score
+- 30–49: Attempted separation but bokeh is harsh, busy, or distracting
+- 0–29: Poor background rendering that actively hurts the image
+
+The final score is computed as: round(technical×0.30 + composition×0.30 + subject×0.25 + bokeh×0.15). Do not include a "score" field — it will be calculated automatically.
+
+Be critical and use the full range. Set all subscores to 0 for failed and good.
 
 Be concise. Reasoning should be 2-3 sentences max. Strengths and weaknesses: 3 items max each.
 
@@ -170,13 +185,15 @@ Respond ONLY with valid JSON matching this schema:
 
 // claudeResponse is the expected JSON structure from Claude.
 type claudeResponse struct {
-	Category       string   `json:"category"`
-	TechnicalScore int      `json:"technical_score"`
-	ArtisticScore  int      `json:"artistic_score"`
-	Reasoning      string   `json:"reasoning"`
-	Technical      string   `json:"technical"`
-	Strengths      []string `json:"strengths"`
-	Weaknesses     []string `json:"weaknesses"`
+	Category         string   `json:"category"`
+	TechnicalScore   int      `json:"technical_score"`
+	CompositionScore int      `json:"composition_score"`
+	SubjectScore     int      `json:"subject_score"`
+	BokehScore       int      `json:"bokeh_score"`
+	Reasoning        string   `json:"reasoning"`
+	Technical        string   `json:"technical"`
+	Strengths        []string `json:"strengths"`
+	Weaknesses       []string `json:"weaknesses"`
 }
 
 // AnalyzeImage calls the Claude vision API for a single image and returns a PhotoDecision.
@@ -260,13 +277,17 @@ func AnalyzeImage(ctx context.Context, client *anthropic.Client, model string, f
 			Strengths:  cr.Strengths,
 			Weaknesses: cr.Weaknesses,
 		}
-		if cat == reviewer.CategoryKeeper && (cr.TechnicalScore > 0 || cr.ArtisticScore > 0) {
+		if cat == reviewer.CategoryKeeper && (cr.TechnicalScore > 0 || cr.CompositionScore > 0 || cr.SubjectScore > 0) {
 			ts := clamp(cr.TechnicalScore, 0, 100)
-			as := clamp(cr.ArtisticScore, 0, 100)
-			score := int(math.Round(float64(ts)*0.6 + float64(as)*0.4))
+			cs := clamp(cr.CompositionScore, 0, 100)
+			ss := clamp(cr.SubjectScore, 0, 100)
+			bs := clamp(cr.BokehScore, 0, 100)
+			score := int(math.Round(float64(ts)*0.30 + float64(cs)*0.30 + float64(ss)*0.25 + float64(bs)*0.15))
 			d.Score = &score
 			d.TechnicalScore = &ts
-			d.ArtisticScore = &as
+			d.CompositionScore = &cs
+			d.SubjectScore = &ss
+			d.BokehScore = &bs
 		}
 		return d, nil
 	}

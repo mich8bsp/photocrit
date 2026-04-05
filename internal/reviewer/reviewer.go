@@ -22,9 +22,11 @@ type PhotoDecision struct {
 	Filename       string    `json:"filename"`
 	Category       Category  `json:"category"`
 	Override       *Category `json:"override"`
-	Score          *int      `json:"score,omitempty"`           // 0–100, keepers only; computed from subscores
-	TechnicalScore *int      `json:"technical_score,omitempty"` // 0–100, raw technical subscore
-	ArtisticScore  *int      `json:"artistic_score,omitempty"`  // 0–100, raw artistic subscore
+	Score            *int      `json:"score,omitempty"`             // 0–100, keepers only; computed from subscores
+	TechnicalScore   *int      `json:"technical_score,omitempty"`   // 0–100: unintentional flaws only (30%)
+	CompositionScore *int      `json:"composition_score,omitempty"` // 0–100: framing, colors (30%)
+	SubjectScore     *int      `json:"subject_score,omitempty"`     // 0–100: wow factor / subject interest (25%)
+	BokehScore       *int      `json:"bokeh_score,omitempty"`       // 0–100: subject separation quality; 50 = neutral/absent (15%)
 	Reasoning      string    `json:"reasoning"`
 	Technical      string    `json:"technical"`
 	Strengths      []string  `json:"strengths"`
